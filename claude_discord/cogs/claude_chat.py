@@ -671,7 +671,7 @@ class ClaudeChatCog(commands.Cog):
 
         # If there are images but no text prompt, add a default instruction to analyze the new image(s)
         if image_urls and not prompt:
-            prompt = "请分析这张图片"
+            prompt = "请仔细识别分析这张图片"
 
         # Nothing to send — ignore silently (e.g. unsupported attachment only).
         if not prompt and not image_urls:
