@@ -669,6 +669,10 @@ class ClaudeChatCog(commands.Cog):
         session_id = record.session_id if record else None
         prompt, image_urls = await self._build_prompt_and_images(message)
 
+        # If there are images but no text prompt, add a default instruction to analyze the new image(s)
+        if image_urls and not prompt:
+            prompt = "请分析这张图片"
+
         # Nothing to send — ignore silently (e.g. unsupported attachment only).
         if not prompt and not image_urls:
             return
