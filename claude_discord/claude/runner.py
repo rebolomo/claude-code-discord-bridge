@@ -88,7 +88,7 @@ class ClaudeRunner:
         api_secret: str | None = None,
         thread_id: int | None = None,
         append_system_prompt: str | None = None,
-        image_urls: list[str] | None = None,
+        image_urls: list[dict[str, str]] | None = None,
         fork_session: bool = False,
     ) -> None:
         self.command = command
@@ -272,17 +272,33 @@ class ClaudeRunner:
         assert self._process is not None and self._process.stdin is not None
 
         content: list[dict] = []
-        for url in self.image_urls or []:
-            content.append(
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "url",
-                        "url": url,
-                    },
-                }
-            )
-            logger.debug("Added image URL for stream-json input: %.80s", url)
+        for img_source in self.image_urls or []:
+            # Support both URL type and base64 type image sources
+            if img_source.get("type") == "base64":
+                content.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": img_source.get("media_type", "image/jpeg"),
+                            "data": img_source.get("data", ""),
+                        },
+                    }
+                )
+                logger.debug("Added base64 image for stream-json input")
+            else:
+                # URL type (original behavior)
+                url = img_source.get("url", "")
+                content.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "url",
+                            "url": url,
+                        },
+                    }
+                )
+                logger.debug("Added image URL for stream-json input: %.80s", url)
 
         # Only add the text block if the prompt is non-empty.
         # An empty text block causes a 400 error from the Anthropic API when

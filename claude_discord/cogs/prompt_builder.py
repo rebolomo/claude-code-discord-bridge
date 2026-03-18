@@ -7,9 +7,13 @@ Cog or Bot state.
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import logging
-import os.path
+import os
+import tempfile
 
+import aiohttp
 import discord
 
 logger = logging.getLogger(__name__)
@@ -76,6 +80,12 @@ _IMAGE_EXTENSIONS: frozenset[str] = frozenset(
         ".svg",
     }
 )
+# Image storage directory
+IMAGE_CACHE_DIR = os.path.join(tempfile.gettempdir(), "ccdb_images")
+
+# Ensure cache directory exists
+os.makedirs(IMAGE_CACHE_DIR, exist_ok=True)
+
 MAX_ATTACHMENT_BYTES = (
     200_000  # 200 KB per file — Discord auto-converted messages can exceed 100 KB
 )
@@ -112,31 +122,81 @@ def wants_file_attachment(prompt: str) -> bool:
     return any(kw in lower for kw in _SEND_FILE_KEYWORDS)
 
 
-async def build_prompt_and_images(message: discord.Message) -> tuple[str, list[str]]:
-    """Build the prompt string and collect image attachment URLs.
+# Image data structure for Claude API
+# type: "url" for web URLs, "base64" for local files
+ImageSource = dict[str, str]
+
+
+async def download_discord_attachment(attachment: discord.Attachment) -> ImageSource | None:
+    """Download a Discord attachment and return as base64 image source.
+
+    Discord CDN URLs require authentication and cannot be accessed by Claude API.
+    This function downloads the image and converts it to base64 format.
+
+    Returns:
+        ImageSource dict with type "base64", or None if download fails.
+    """
+    try:
+        # Download the image
+        image_data = await attachment.read()
+
+        # Determine media type from content_type or filename
+        content_type = attachment.content_type or ""
+        if not content_type:
+            ext = os.path.splitext(attachment.filename.lower())[1]
+            ext_to_mime = {
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".gif": "image/gif",
+                ".webp": "image/webp",
+                ".bmp": "image/bmp",
+            }
+            content_type = ext_to_mime.get(ext, "image/jpeg")
+
+        # Encode as base64
+        b64_data = base64.b64encode(image_data).decode("utf-8")
+
+        return {
+            "type": "base64",
+            "media_type": content_type,
+            "data": b64_data,
+        }
+    except Exception as e:
+        logger.debug("Failed to download attachment %s: %s", attachment.filename, e)
+        return None
+
+
+async def build_prompt_and_images(message: discord.Message) -> tuple[str, list[ImageSource]]:
+    """Build the prompt string and collect image attachment data.
 
     Text attachments (text/*, application/json, application/xml) are appended
-    inline to the prompt.  Image attachments (image/*) are collected as HTTPS
-    URLs (Discord CDN) and returned for stream-json input to Claude Code CLI.
+    inline to the prompt.  Image attachments (image/*) are downloaded and
+    converted to base64 for Claude API compatibility.
 
-    Claude Code CLI silently drops base64 image blocks in stream-json mode.
-    Passing Discord CDN URLs directly as ``{"type": "url"}`` image sources is
-    the only format the CLI forwards to the Anthropic API.
+    Supports three image sources:
+    1. message.attachments - uploaded/pasted images (downloaded to base64)
+    2. message.embeds[].image - embed images (link previews, kept as URL)
+    3. message.embeds[].thumbnail - embed thumbnails (kept as URL)
+
+    Discord CDN URLs require authentication and cannot be accessed by Claude API,
+    so uploaded images are downloaded and converted to base64.
 
     Both binary-file types that exceed size limits and unsupported types are
     silently skipped — never raise an error to the user.
 
     Returns:
-        (prompt_text, image_urls) — HTTPS URLs for stream-json url-type blocks.
+        (prompt_text, image_sources) — List of ImageSource dicts for stream-json.
     """
     prompt = message.content or ""
-    if not message.attachments:
+    if not message.attachments and not message.embeds:
         return prompt, []
 
     total_bytes = 0
     sections: list[str] = []
-    image_urls: list[str] = []
+    image_sources: list[ImageSource] = []
 
+    # ---- Collect images from message.attachments (uploaded/pasted) ----
     for attachment in message.attachments[:MAX_ATTACHMENTS]:
         content_type = attachment.content_type or ""
 
@@ -149,9 +209,10 @@ async def build_prompt_and_images(message: discord.Message) -> tuple[str, list[s
             elif ext in _TEXT_EXTENSIONS:
                 content_type = "text/plain"
 
-        # ---- Image attachments → collect CDN URL for stream-json input ----
+        # ---- Image attachments → download and convert to base64 ----
+        # Discord CDN URLs require auth, so we must download the image
         if content_type.startswith(IMAGE_MIME_PREFIXES):
-            if len(image_urls) >= MAX_IMAGES:
+            if len(image_sources) >= MAX_IMAGES:
                 logger.debug("Skipping image %s: max images reached", attachment.filename)
                 continue
             if attachment.size > MAX_IMAGE_BYTES:
@@ -161,8 +222,12 @@ async def build_prompt_and_images(message: discord.Message) -> tuple[str, list[s
                     attachment.size,
                 )
                 continue
-            image_urls.append(attachment.url)
-            logger.debug("Collected image URL for %s: %.80s", attachment.filename, attachment.url)
+
+            # Download Discord attachment and convert to base64
+            img_source = await download_discord_attachment(attachment)
+            if img_source:
+                image_sources.append(img_source)
+                logger.debug("Downloaded and converted image to base64: %s", attachment.filename)
             continue
 
         # ---- Text attachments → inline in prompt ----
@@ -198,4 +263,28 @@ async def build_prompt_and_images(message: discord.Message) -> tuple[str, list[s
             logger.debug("Failed to read attachment %s", attachment.filename, exc_info=True)
             continue
 
-    return prompt + "".join(sections), image_urls
+    # ---- Collect images from message.embeds (link previews, thumbnails) ----
+    # These are public URLs, keep as-is
+    for embed in message.embeds:
+        if len(image_sources) >= MAX_IMAGES:
+            break
+
+        # Check embed.image (link preview)
+        if embed.image and embed.image.url:
+            image_sources.append({
+                "type": "url",
+                "url": embed.image.url,
+            })
+            logger.debug("Collected embed image URL: %.80s", embed.image.url)
+            continue
+
+        # Check embed.thumbnail
+        if embed.thumbnail and embed.thumbnail.url:
+            image_sources.append({
+                "type": "url",
+                "url": embed.thumbnail.url,
+            })
+            logger.debug("Collected embed thumbnail URL: %.80s", embed.thumbnail.url)
+            continue
+
+    return prompt + "".join(sections), image_sources
