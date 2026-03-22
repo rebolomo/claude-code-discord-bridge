@@ -128,14 +128,17 @@ class ToolResultView(discord.ui.View):
     @discord.ui.button(label="Expand ▼", style=discord.ButtonStyle.secondary)
     async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         """Toggle between collapsed (preview) and expanded (full) output."""
-        self._expanded = not self._expanded
-        if self._expanded:
-            button.label = "Collapse ▲"
-            embed = tool_result_embed(self._tool_title, self._full_content)
-        else:
-            button.label = "Expand ▼"
-            embed = tool_result_preview_embed(self._tool_title, self._full_content)
-        await interaction.response.edit_message(embed=embed, view=self)
+        try:
+            self._expanded = not self._expanded
+            if self._expanded:
+                button.label = "Collapse ▲"
+                embed = tool_result_embed(self._tool_title, self._full_content)
+            else:
+                button.label = "Expand ▼"
+                embed = tool_result_preview_embed(self._tool_title, self._full_content)
+            await interaction.response.edit_message(embed=embed, view=self)
+        except Exception as e:
+            await interaction.response.send_message(f"Error: {str(e)[:100]}", ephemeral=True)
 
 
 class ThinkingView(discord.ui.View):
@@ -153,14 +156,17 @@ class ThinkingView(discord.ui.View):
     @discord.ui.button(label="Expand ▼", style=discord.ButtonStyle.secondary)
     async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         """Toggle between collapsed (preview) and expanded (full) thinking."""
-        self._expanded = not self._expanded
-        if self._expanded:
-            button.label = "Collapse ▲"
-            embed = thinking_embed(self._thinking_text)
-        else:
-            button.label = "Expand ▼"
-            embed = thinking_embed_preview(self._thinking_text)
-        await interaction.response.edit_message(embed=embed, view=self)
+        try:
+            self._expanded = not self._expanded
+            if self._expanded:
+                button.label = "Collapse ▲"
+                embed = thinking_embed(self._thinking_text)
+            else:
+                button.label = "Expand ▼"
+                embed = thinking_embed_preview(self._thinking_text)
+            await interaction.response.edit_message(embed=embed, view=self)
+        except Exception as e:
+            await interaction.response.send_message(f"Error: {str(e)[:100]}", ephemeral=True)
 
 
 class ToolSelectView(discord.ui.View):
