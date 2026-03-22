@@ -11,7 +11,7 @@ import discord
 
 from ..claude.rewind import TurnEntry, truncate_jsonl_at_line
 from ..claude.runner import ClaudeRunner
-from .embeds import COLOR_SUCCESS, stopped_embed, tool_result_embed, tool_result_preview_embed
+from .embeds import COLOR_SUCCESS, COLOR_THINKING, stopped_embed, thinking_embed, thinking_embed_preview, tool_result_embed, tool_result_preview_embed
 
 if TYPE_CHECKING:
     from ..database.settings_repo import SettingsRepository
@@ -135,6 +135,31 @@ class ToolResultView(discord.ui.View):
         else:
             button.label = "Expand ▼"
             embed = tool_result_preview_embed(self._tool_title, self._full_content)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+
+class ThinkingView(discord.ui.View):
+    """▼/▲ toggle button that collapses or expands a thinking embed.
+
+    Posted alongside the thinking when the content is long,
+    so the thread stays compact by default.
+    """
+
+    def __init__(self, thinking_text: str) -> None:
+        super().__init__(timeout=3600)
+        self._thinking_text = thinking_text
+        self._expanded = False
+
+    @discord.ui.button(label="Expand ▼", style=discord.ButtonStyle.secondary)
+    async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        """Toggle between collapsed (preview) and expanded (full) thinking."""
+        self._expanded = not self._expanded
+        if self._expanded:
+            button.label = "Collapse ▲"
+            embed = thinking_embed(self._thinking_text)
+        else:
+            button.label = "Expand ▼"
+            embed = thinking_embed_preview(self._thinking_text)
         await interaction.response.edit_message(embed=embed, view=self)
 
 

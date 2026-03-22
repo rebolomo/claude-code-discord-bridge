@@ -26,6 +26,7 @@ from ..discord_ui.embeds import (
     redacted_thinking_embed,
     session_start_embed,
     thinking_embed,
+    thinking_embed_preview,
     todo_embed,
     tool_result_embed,
     tool_result_preview_embed,
@@ -85,8 +86,8 @@ async def _send_attachment_requests(
 # The embed description limit is 4096, so this leaves room for code block markers.
 _TOOL_RESULT_MAX_CHARS = 3000
 # Lines of output shown inline before the "Expand ▼" button appears.
-# 1 means single-line results are shown flat; 2+ lines get a collapse button.
-_COLLAPSED_LINES = 1
+# 3 means results with 3 or fewer lines are shown flat; 4+ lines get a collapse button.
+_COLLAPSED_LINES = 3
 
 
 def _truncate_result(content: str) -> str:
@@ -260,7 +261,17 @@ class EventProcessor:
         # Extended thinking — only post on complete events (not partials).
         # Skip in chat_only mode.
         if event.thinking and not event.is_partial and not self._chat_only:
-            await self._config.thread.send(embed=thinking_embed(event.thinking))
+            # Check if thinking is long enough to warrant expand/collapse (> 1 line)
+            thinking_lines = len(event.thinking.split("\n"))
+            logger.info(f"[THINKING] lines={thinking_lines}, text_length={len(event.thinking)}")
+            if thinking_lines > 1:
+                # Send with expand/collapse button
+                from ..discord_ui.views import ThinkingView
+                view = ThinkingView(event.thinking)
+                await self._config.thread.send(embed=thinking_embed_preview(event.thinking), view=view)
+            else:
+                # Short thinking, no button needed
+                await self._config.thread.send(embed=thinking_embed(event.thinking))
 
         # Redacted thinking — only post on complete events. Skip in chat_only mode.
         if event.has_redacted_thinking and not event.is_partial and not self._chat_only:
@@ -323,18 +334,25 @@ class EventProcessor:
         title = tool_msg.embeds[0].title or ""
         if event.tool_result_content:
             truncated = _truncate_result(event.tool_result_content)
-            if len(truncated.split("\n")) > _COLLAPSED_LINES:
+            # Count both actual newlines and escaped \n in JSON strings
+            lines_actual = truncated.count("\n")
+            lines_escaped = truncated.count("\\n")
+            content_lines = max(lines_actual, lines_escaped)
+            logger.info(f"[TOOL_RESULT] title={title}, actual_newlines={lines_actual}, escaped_newlines={lines_escaped}, total={content_lines}, _COLLAPSED_LINES={_COLLAPSED_LINES}")
+            # Convert escaped newlines to actual newlines for display
+            display_content = truncated.replace("\\n", "\n")
+            if content_lines > _COLLAPSED_LINES:
                 from ..discord_ui.views import ToolResultView
 
-                embed = tool_result_preview_embed(title, truncated)
-                view = ToolResultView(title, truncated)
+                embed = tool_result_preview_embed(title, display_content)
+                view = ToolResultView(title, display_content)
                 try:
                     await tool_msg.edit(embed=embed, view=view)
                 except Exception:
                     logger.warning("Failed to update tool result embed", exc_info=True)
             else:
                 try:
-                    await tool_msg.edit(embed=tool_result_embed(title, truncated))
+                    await tool_msg.edit(embed=tool_result_embed(title, display_content))
                 except Exception:
                     logger.warning("Failed to update tool result embed", exc_info=True)
         else:
@@ -502,6 +520,7 @@ class EventProcessor:
     async def _handle_tool_use(self, event: StreamEvent) -> None:
         """Post tool use embed and start the live timer."""
         assert event.tool_use is not None
+        logger.info(f"[TOOL_USE] name={event.tool_use.tool_name}, tool_id={event.tool_use.tool_id}")
 
         # Finalize any in-progress streaming text before the tool embed.
         if self._streamer.has_content:

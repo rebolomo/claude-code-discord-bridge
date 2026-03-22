@@ -185,8 +185,8 @@ class ClaudeChatCog(commands.Cog):
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         """Handle incoming messages."""
-        # Ignore bot messages
-        if message.author.bot:
+        # Ignore bot messages (but allow webhook messages for testing)
+        if message.author.bot and not message.webhook_id:
             return
 
         # Ignore Discord system messages (thread renames, pins, call events, etc.)

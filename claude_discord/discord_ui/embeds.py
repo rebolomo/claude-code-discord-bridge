@@ -169,6 +169,20 @@ def tool_result_embed(tool_title: str, result_content: str) -> discord.Embed:
     return embed
 
 
+def thinking_embed_preview(thinking_text: str) -> discord.Embed:
+    """Create a preview embed for extended thinking (collapsed)."""
+    # Show only first 3 lines as preview
+    lines = thinking_text.split("\n")
+    preview = "\n".join(lines[:3])
+    if len(lines) > 3:
+        preview += f"\n... (+{len(lines) - 3} lines)"
+    return discord.Embed(
+        title="\U0001f4ad Thinking",
+        description=f"```\n{preview}\n```",
+        color=COLOR_THINKING,
+    )
+
+
 def thinking_embed(thinking_text: str) -> discord.Embed:
     """Create an embed for extended thinking content.
 
