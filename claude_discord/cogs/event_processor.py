@@ -267,8 +267,11 @@ class EventProcessor:
             if thinking_lines > 1:
                 # Send with expand/collapse button
                 from ..discord_ui.views import ThinkingView
-                view = ThinkingView(event.thinking)
-                await self._config.thread.send(embed=thinking_embed_preview(event.thinking), view=view)
+                # Send placeholder first to get message_id
+                msg = await self._config.thread.send(embed=thinking_embed_preview(event.thinking))
+                # Create view with message_id for storage
+                view = ThinkingView(event.thinking, message_id=msg.id)
+                await msg.edit(view=view)
             else:
                 # Short thinking, no button needed
                 await self._config.thread.send(embed=thinking_embed(event.thinking))
@@ -345,7 +348,7 @@ class EventProcessor:
                 from ..discord_ui.views import ToolResultView
 
                 embed = tool_result_preview_embed(title, display_content)
-                view = ToolResultView(title, display_content)
+                view = ToolResultView(title, display_content, message_id=tool_msg.id)
                 try:
                     await tool_msg.edit(embed=embed, view=view)
                 except Exception:

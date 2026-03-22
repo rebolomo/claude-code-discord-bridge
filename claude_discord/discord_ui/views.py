@@ -18,6 +18,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Global storage for expand/collapse content, keyed by message_id
+# This survives bot restarts because we read content when button is clicked
+_expandable_content: dict[int, dict] = {}
+
 
 class StopView(discord.ui.View):
     """A ⏹ Stop button attached to the session status message.
@@ -115,45 +119,57 @@ class StopView(discord.ui.View):
 class ToolResultView(discord.ui.View):
     """▼/▲ toggle button that collapses or expands a tool result embed.
 
-    Uses persistent storage: content is encoded in the embed footer so it
-    survives bot restarts.
+    Uses global storage keyed by message ID for persistent content.
     """
 
     # Class-level custom_id for persistent view registration
     CUSTOM_ID = "tool_result_toggle"
 
-    def __init__(self, tool_title: str, full_content: str) -> None:
+    def __init__(self, tool_title: str, full_content: str, message_id: int | None = None) -> None:
         super().__init__(timeout=None)  # Persistent view
         self._tool_title = tool_title
-        self._full_content = full_content
+        self._message_id = message_id
+        # Store content in global dict if message_id provided
+        if message_id is not None:
+            _expandable_content[message_id] = {
+                "type": "tool_result",
+                "title": tool_title,
+                "content": full_content,
+            }
 
     @discord.ui.button(label="Expand ▼", style=discord.ButtonStyle.secondary, custom_id=CUSTOM_ID)
     async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         """Toggle between collapsed (preview) and expanded (full) output."""
         try:
-            # Read content from the message's embed footer (set during creation)
+            # Get content from global storage
             message = interaction.message
-            if message and message.embeds:
-                embed = message.embeds[0]
-                # Get content from footer (base64 encoded)
-                footer_text = embed.footer.text if embed.footer else ""
-                if footer_text.startswith("data:"):
-                    import base64
-                    encoded = footer_text[5:]  # Remove "data:" prefix
-                    try:
-                        self._full_content = base64.b64decode(encoded).decode("utf-8")
-                    except Exception:
-                        pass
+            content = None
+            tool_title = None
+
+            if message:
+                stored = _expandable_content.get(message.id)
+                if stored:
+                    content = stored.get("content")
+                    tool_title = stored.get("title")
+
+            if not content:
+                await interaction.response.send_message(
+                    "内容已过期，请重新运行命令",
+                    ephemeral=True,
+                )
+                return
+
+            tool_title = tool_title or "Tool Result"
 
             # Check current state from button label
             is_expanded = button.label.startswith("Collapse")
 
             if is_expanded:
                 button.label = "Expand ▼"
-                embed = tool_result_preview_embed(self._tool_title, self._full_content)
+                embed = tool_result_preview_embed(tool_title, content)
             else:
                 button.label = "Collapse ▲"
-                embed = tool_result_embed(self._tool_title, self._full_content)
+                embed = tool_result_embed(tool_title, content)
 
             await interaction.response.edit_message(embed=embed, view=self)
         except Exception as e:
@@ -163,43 +179,50 @@ class ToolResultView(discord.ui.View):
 class ThinkingView(discord.ui.View):
     """▼/▲ toggle button that collapses or expands a thinking embed.
 
-    Uses persistent storage: content is encoded in the embed footer so it
-    survives bot restarts.
+    Uses global storage keyed by message ID for persistent content.
     """
 
     # Class-level custom_id for persistent view registration
     CUSTOM_ID = "thinking_toggle"
 
-    def __init__(self, thinking_text: str) -> None:
+    def __init__(self, thinking_text: str, message_id: int | None = None) -> None:
         super().__init__(timeout=None)  # Persistent view
-        self._thinking_text = thinking_text
+        # Store content in global dict if message_id provided
+        if message_id is not None:
+            _expandable_content[message_id] = {
+                "type": "thinking",
+                "content": thinking_text,
+            }
 
     @discord.ui.button(label="Expand ▼", style=discord.ButtonStyle.secondary, custom_id=CUSTOM_ID)
     async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         """Toggle between collapsed (preview) and expanded (full) thinking."""
         try:
-            # Read content from the message's embed footer
+            # Get content from global storage
             message = interaction.message
-            if message and message.embeds:
-                embed = message.embeds[0]
-                footer_text = embed.footer.text if embed.footer else ""
-                if footer_text.startswith("data:"):
-                    import base64
-                    encoded = footer_text[5:]
-                    try:
-                        self._thinking_text = base64.b64decode(encoded).decode("utf-8")
-                    except Exception:
-                        pass
+            content = None
+
+            if message:
+                stored = _expandable_content.get(message.id)
+                if stored:
+                    content = stored.get("content")
+
+            if not content:
+                await interaction.response.send_message(
+                    "内容已过期，请重新运行命令",
+                    ephemeral=True,
+                )
+                return
 
             # Check current state from button label
             is_expanded = button.label.startswith("Collapse")
 
             if is_expanded:
                 button.label = "Expand ▼"
-                embed = thinking_embed_preview(self._thinking_text)
+                embed = thinking_embed_preview(content)
             else:
                 button.label = "Collapse ▲"
-                embed = thinking_embed(self._thinking_text)
+                embed = thinking_embed(content)
 
             await interaction.response.edit_message(embed=embed, view=self)
         except Exception as e:
