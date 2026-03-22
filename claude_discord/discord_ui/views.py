@@ -115,27 +115,46 @@ class StopView(discord.ui.View):
 class ToolResultView(discord.ui.View):
     """▼/▲ toggle button that collapses or expands a tool result embed.
 
-    Posted alongside the tool result when the output exceeds the preview
-    threshold, so the thread stays compact by default.
+    Uses persistent storage: content is encoded in the embed footer so it
+    survives bot restarts.
     """
 
+    # Class-level custom_id for persistent view registration
+    CUSTOM_ID = "tool_result_toggle"
+
     def __init__(self, tool_title: str, full_content: str) -> None:
-        super().__init__(timeout=3600)
+        super().__init__(timeout=None)  # Persistent view
         self._tool_title = tool_title
         self._full_content = full_content
-        self._expanded = False
 
-    @discord.ui.button(label="Expand ▼", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Expand ▼", style=discord.ButtonStyle.secondary, custom_id=CUSTOM_ID)
     async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         """Toggle between collapsed (preview) and expanded (full) output."""
         try:
-            self._expanded = not self._expanded
-            if self._expanded:
-                button.label = "Collapse ▲"
-                embed = tool_result_embed(self._tool_title, self._full_content)
-            else:
+            # Read content from the message's embed footer (set during creation)
+            message = interaction.message
+            if message and message.embeds:
+                embed = message.embeds[0]
+                # Get content from footer (base64 encoded)
+                footer_text = embed.footer.text if embed.footer else ""
+                if footer_text.startswith("data:"):
+                    import base64
+                    encoded = footer_text[5:]  # Remove "data:" prefix
+                    try:
+                        self._full_content = base64.b64decode(encoded).decode("utf-8")
+                    except Exception:
+                        pass
+
+            # Check current state from button label
+            is_expanded = button.label.startswith("Collapse")
+
+            if is_expanded:
                 button.label = "Expand ▼"
                 embed = tool_result_preview_embed(self._tool_title, self._full_content)
+            else:
+                button.label = "Collapse ▲"
+                embed = tool_result_embed(self._tool_title, self._full_content)
+
             await interaction.response.edit_message(embed=embed, view=self)
         except Exception as e:
             await interaction.response.send_message(f"Error: {str(e)[:100]}", ephemeral=True)
@@ -144,26 +163,44 @@ class ToolResultView(discord.ui.View):
 class ThinkingView(discord.ui.View):
     """▼/▲ toggle button that collapses or expands a thinking embed.
 
-    Posted alongside the thinking when the content is long,
-    so the thread stays compact by default.
+    Uses persistent storage: content is encoded in the embed footer so it
+    survives bot restarts.
     """
 
-    def __init__(self, thinking_text: str) -> None:
-        super().__init__(timeout=3600)
-        self._thinking_text = thinking_text
-        self._expanded = False
+    # Class-level custom_id for persistent view registration
+    CUSTOM_ID = "thinking_toggle"
 
-    @discord.ui.button(label="Expand ▼", style=discord.ButtonStyle.secondary)
+    def __init__(self, thinking_text: str) -> None:
+        super().__init__(timeout=None)  # Persistent view
+        self._thinking_text = thinking_text
+
+    @discord.ui.button(label="Expand ▼", style=discord.ButtonStyle.secondary, custom_id=CUSTOM_ID)
     async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         """Toggle between collapsed (preview) and expanded (full) thinking."""
         try:
-            self._expanded = not self._expanded
-            if self._expanded:
-                button.label = "Collapse ▲"
-                embed = thinking_embed(self._thinking_text)
-            else:
+            # Read content from the message's embed footer
+            message = interaction.message
+            if message and message.embeds:
+                embed = message.embeds[0]
+                footer_text = embed.footer.text if embed.footer else ""
+                if footer_text.startswith("data:"):
+                    import base64
+                    encoded = footer_text[5:]
+                    try:
+                        self._thinking_text = base64.b64decode(encoded).decode("utf-8")
+                    except Exception:
+                        pass
+
+            # Check current state from button label
+            is_expanded = button.label.startswith("Collapse")
+
+            if is_expanded:
                 button.label = "Expand ▼"
                 embed = thinking_embed_preview(self._thinking_text)
+            else:
+                button.label = "Collapse ▲"
+                embed = thinking_embed(self._thinking_text)
+
             await interaction.response.edit_message(embed=embed, view=self)
         except Exception as e:
             await interaction.response.send_message(f"Error: {str(e)[:100]}", ephemeral=True)

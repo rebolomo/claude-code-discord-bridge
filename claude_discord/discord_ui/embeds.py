@@ -131,10 +131,21 @@ def session_complete_embed(
 _PREVIEW_LINES = 3
 
 
+def _encode_footer(content: str) -> str:
+    """Encode content in footer for persistent view storage."""
+    import base64
+    encoded = base64.b64encode(content.encode("utf-8")).decode("utf-8")
+    # Truncate if too long (Discord footer limit is 2048 chars)
+    if len(encoded) > 2000:
+        encoded = encoded[:2000]
+    return f"data:{encoded}"
+
+
 def tool_result_preview_embed(tool_title: str, full_content: str) -> discord.Embed:
     """Collapsed embed showing the first _PREVIEW_LINES lines and a hidden-count hint.
 
     Paired with ToolResultView so the user can expand on demand.
+    Stores full content in footer for persistent toggle functionality.
     """
     title = tool_title.rstrip(".")
     embed = discord.Embed(title=title[:256], color=COLOR_INFO)
@@ -145,6 +156,8 @@ def tool_result_preview_embed(tool_title: str, full_content: str) -> discord.Emb
         if hidden > 0:
             preview += f"\n... +{hidden} lines"
         embed.description = f"```\n{preview}\n```"
+        # Store full content in footer for persistent view
+        embed.set_footer(text=_encode_footer(full_content))
     return embed
 
 
@@ -154,6 +167,7 @@ def tool_result_embed(tool_title: str, result_content: str) -> discord.Embed:
     Replaces the in-progress tool embed once the result is available.
     Uses description (4096-char limit) rather than a field (1024-char limit)
     so that up to ~30 lines of output can be shown without truncation.
+    Stores full content in footer for persistent toggle functionality.
     """
     # Strip the trailing "..." from in-progress title
     title = tool_title.rstrip(".")
@@ -166,21 +180,28 @@ def tool_result_embed(tool_title: str, result_content: str) -> discord.Embed:
         max_content = 4096 - 8
         display = result_content[:max_content]
         embed.description = f"```\n{display}\n```"
+        # Store full content in footer for persistent view
+        embed.set_footer(text=_encode_footer(result_content))
     return embed
 
 
 def thinking_embed_preview(thinking_text: str) -> discord.Embed:
-    """Create a preview embed for extended thinking (collapsed)."""
+    """Create a preview embed for extended thinking (collapsed).
+
+    Stores full content in footer for persistent toggle functionality.
+    """
     # Show only first 3 lines as preview
     lines = thinking_text.split("\n")
     preview = "\n".join(lines[:3])
     if len(lines) > 3:
         preview += f"\n... (+{len(lines) - 3} lines)"
-    return discord.Embed(
+    embed = discord.Embed(
         title="\U0001f4ad Thinking",
         description=f"```\n{preview}\n```",
         color=COLOR_THINKING,
     )
+    embed.set_footer(text=_encode_footer(thinking_text))
+    return embed
 
 
 def thinking_embed(thinking_text: str) -> discord.Embed:
@@ -193,17 +214,21 @@ def thinking_embed(thinking_text: str) -> discord.Embed:
     Note: spoiler + code block combinations (||```text```||) do not apply code
     block styling when revealed inside embed descriptions; the text still picks
     up the embed accent color and can become unreadable.
+
+    Stores full content in footer for persistent toggle functionality.
     """
     # Reserve chars for code block markers: ```\n...\n``` = 8 chars overhead
     max_text = 4096 - 8 - len("\n... (truncated)")
     truncated = thinking_text[:max_text]
     if len(thinking_text) > max_text:
         truncated += "\n... (truncated)"
-    return discord.Embed(
+    embed = discord.Embed(
         title="\U0001f4ad Thinking",
         description=f"```\n{truncated}\n```",
         color=COLOR_THINKING,
     )
+    embed.set_footer(text=_encode_footer(thinking_text))
+    return embed
 
 
 def redacted_thinking_embed() -> discord.Embed:

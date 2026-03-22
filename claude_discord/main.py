@@ -98,6 +98,11 @@ async def main() -> None:
         owner_id=owner_id,
     )
 
+    # Register persistent views for expand/collapse buttons
+    from .bot import _register_persistent_views
+
+    _register_persistent_views(bot)
+
     # Optional API server
     api_server = None
     if config["api_port"]:

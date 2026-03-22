@@ -23,6 +23,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _register_persistent_views(bot: commands.Bot) -> None:
+    """Register persistent view classes for expand/collapse buttons.
+
+    These views store content in embed footers, so we don't need to restore
+    their state on startup - we just need to register the view classes so
+    Discord knows where to send button interactions.
+    """
+    from .discord_ui.views import ThinkingView, ToolResultView
+
+    # Create placeholder views to register their custom_ids
+    # Content is read from message embed footer on button click
+    bot.add_view(ThinkingView("placeholder"))
+    bot.add_view(ToolResultView("placeholder", "placeholder"))
+    logger.info("Registered persistent views: ThinkingView, ToolResultView")
+
+
 class ClaudeDiscordBot(commands.Bot):
     """Discord bot that bridges messages to Claude Code CLI."""
 
