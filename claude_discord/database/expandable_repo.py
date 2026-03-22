@@ -92,15 +92,3 @@ class ExpandableContentRepository:
             (message_id,),
         )
         await self._db.commit()
-
-    async def cleanup_old(self, max_age_seconds: int = 86400) -> int:
-        """Delete content older than max_age_seconds. Returns count of deleted rows."""
-        if not self._db:
-            return 0
-        cutoff = int(time.time()) - max_age_seconds
-        cursor = await self._db.execute(
-            "DELETE FROM expandable_content WHERE created_at < ?",
-            (cutoff,),
-        )
-        await self._db.commit()
-        return cursor.rowcount
