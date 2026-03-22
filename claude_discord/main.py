@@ -98,6 +98,14 @@ async def main() -> None:
         owner_id=owner_id,
     )
 
+    # Initialize expandable content repository for persistent expand/collapse
+    from .database.expandable_repo import ExpandableContentRepository
+    from .discord_ui.views import set_expandable_repo
+
+    expandable_repo = ExpandableContentRepository("data/sessions.db")
+    await expandable_repo.init_db()
+    set_expandable_repo(expandable_repo)  # Set global reference for views
+
     # Register persistent views for expand/collapse buttons
     from .bot import _register_persistent_views
 

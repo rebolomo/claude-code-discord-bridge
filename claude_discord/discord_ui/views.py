@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 from pathlib import Path
@@ -14,13 +15,25 @@ from ..claude.runner import ClaudeRunner
 from .embeds import COLOR_SUCCESS, COLOR_THINKING, stopped_embed, thinking_embed, thinking_embed_preview, tool_result_embed, tool_result_preview_embed
 
 if TYPE_CHECKING:
+    from ..database.expandable_repo import ExpandableContentRepository
     from ..database.settings_repo import SettingsRepository
 
 logger = logging.getLogger(__name__)
 
-# Global storage for expand/collapse content, keyed by message_id
-# This survives bot restarts because we read content when button is clicked
-_expandable_content: dict[int, dict] = {}
+# Global reference to the expandable content repository
+# Set by main.py when bot starts
+_expandable_repo: "ExpandableContentRepository | None" = None
+
+
+def _get_expandable_repo() -> "ExpandableContentRepository | None":
+    """Get the expandable content repository."""
+    return _expandable_repo
+
+
+def set_expandable_repo(repo: "ExpandableContentRepository | None") -> None:
+    """Set the global expandable content repository."""
+    global _expandable_repo
+    _expandable_repo = repo
 
 
 class StopView(discord.ui.View):
@@ -119,7 +132,7 @@ class StopView(discord.ui.View):
 class ToolResultView(discord.ui.View):
     """▼/▲ toggle button that collapses or expands a tool result embed.
 
-    Uses global storage keyed by message ID for persistent content.
+    Uses SQLite database for persistent content storage.
     """
 
     # Class-level custom_id for persistent view registration
@@ -129,28 +142,31 @@ class ToolResultView(discord.ui.View):
         super().__init__(timeout=None)  # Persistent view
         self._tool_title = tool_title
         self._message_id = message_id
-        # Store content in global dict if message_id provided
+        # Store content in database if message_id provided
         if message_id is not None:
-            _expandable_content[message_id] = {
-                "type": "tool_result",
-                "title": tool_title,
-                "content": full_content,
-            }
+            repo = _get_expandable_repo()
+            if repo:
+                asyncio.create_task(
+                    repo.store(message_id, "tool_result", full_content, tool_title),
+                    name=f"store-expandable-{message_id}",
+                )
 
     @discord.ui.button(label="Expand ▼", style=discord.ButtonStyle.secondary, custom_id=CUSTOM_ID)
     async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         """Toggle between collapsed (preview) and expanded (full) output."""
         try:
-            # Get content from global storage
+            # Get content from database
             message = interaction.message
             content = None
             tool_title = None
 
             if message:
-                stored = _expandable_content.get(message.id)
-                if stored:
-                    content = stored.get("content")
-                    tool_title = stored.get("title")
+                repo = _get_expandable_repo()
+                if repo:
+                    stored = await repo.get(message.id)
+                    if stored:
+                        content = stored.get("content")
+                        tool_title = stored.get("title")
 
             if not content:
                 await interaction.response.send_message(
@@ -179,7 +195,7 @@ class ToolResultView(discord.ui.View):
 class ThinkingView(discord.ui.View):
     """▼/▲ toggle button that collapses or expands a thinking embed.
 
-    Uses global storage keyed by message ID for persistent content.
+    Uses SQLite database for persistent content storage.
     """
 
     # Class-level custom_id for persistent view registration
@@ -187,25 +203,29 @@ class ThinkingView(discord.ui.View):
 
     def __init__(self, thinking_text: str, message_id: int | None = None) -> None:
         super().__init__(timeout=None)  # Persistent view
-        # Store content in global dict if message_id provided
+        # Store content in database if message_id provided
         if message_id is not None:
-            _expandable_content[message_id] = {
-                "type": "thinking",
-                "content": thinking_text,
-            }
+            repo = _get_expandable_repo()
+            if repo:
+                asyncio.create_task(
+                    repo.store(message_id, "thinking", thinking_text),
+                    name=f"store-thinking-{message_id}",
+                )
 
     @discord.ui.button(label="Expand ▼", style=discord.ButtonStyle.secondary, custom_id=CUSTOM_ID)
     async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         """Toggle between collapsed (preview) and expanded (full) thinking."""
         try:
-            # Get content from global storage
+            # Get content from database
             message = interaction.message
             content = None
 
             if message:
-                stored = _expandable_content.get(message.id)
-                if stored:
-                    content = stored.get("content")
+                repo = _get_expandable_repo()
+                if repo:
+                    stored = await repo.get(message.id)
+                    if stored:
+                        content = stored.get("content")
 
             if not content:
                 await interaction.response.send_message(
