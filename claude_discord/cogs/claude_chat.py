@@ -96,6 +96,7 @@ class ClaudeChatCog(commands.Cog):
         mention_only_channel_ids: set[int] | None = None,
         inline_reply_channel_ids: set[int] | None = None,
         chat_only_channel_ids: set[int] | None = None,
+        require_mention: bool = False,
         auto_rename_threads: bool = False,
     ) -> None:
         self.bot = bot
@@ -113,6 +114,10 @@ class ClaudeChatCog(commands.Cog):
         # Channels where the bot only responds when explicitly @mentioned.
         # Thread replies are not affected (already in an active session).
         self._mention_only_channel_ids: set[int] = mention_only_channel_ids or set()
+        # When True, the bot only responds when @mentioned in any channel
+        # (except thread replies, which are always allowed).
+        # When False (default), only channels in _mention_only_channel_ids require mentions.
+        self._require_mention = require_mention
         # Channels where the bot replies directly (no thread created).
         self._inline_reply_channel_ids: set[int] = inline_reply_channel_ids or set()
         # Channels where only text responses are shown (no tool embeds, thinking, etc.).
@@ -202,9 +207,9 @@ class ClaudeChatCog(commands.Cog):
 
         # Check if message is in one of the configured channels (new conversation)
         if message.channel.id in self._channel_ids:
-            # In mention-only channels, only respond when the bot is @mentioned
+            # Require mention if channel is in mention_only list OR if global require_mention is set
             if (
-                message.channel.id in self._mention_only_channel_ids
+                (message.channel.id in self._mention_only_channel_ids or self._require_mention)
                 and self.bot.user not in message.mentions
             ):
                 return
