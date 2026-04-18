@@ -115,8 +115,8 @@ class ClaudeChatCog(commands.Cog):
         # Thread replies are not affected (already in an active session).
         self._mention_only_channel_ids: set[int] = mention_only_channel_ids or set()
         # When True, the bot only responds when @mentioned in any channel
-        # (except thread replies, which are always allowed).
-        # When False (default), only channels in _mention_only_channel_ids require mentions.
+        # or thread.  When False (default), only channels in
+        # _mention_only_channel_ids require mentions.
         self._require_mention = require_mention
         # Channels where the bot replies directly (no thread created).
         self._inline_reply_channel_ids: set[int] = inline_reply_channel_ids or set()
@@ -669,6 +669,9 @@ class ClaudeChatCog(commands.Cog):
         """
         thread = message.channel
         assert isinstance(thread, discord.Thread)
+
+        if self._require_mention and self.bot.user not in message.mentions:
+            return
 
         record = await self.repo.get(thread.id)
         session_id = record.session_id if record else None
