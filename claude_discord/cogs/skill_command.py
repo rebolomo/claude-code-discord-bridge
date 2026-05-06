@@ -35,16 +35,19 @@ logger = logging.getLogger(__name__)
 
 # YAML frontmatter pattern to extract name/description from SKILL.md
 _FRONTMATTER_RE = re.compile(r"^---[ \t]*\n(?P<body>.*?)^---", re.DOTALL | re.MULTILINE)
-_FIELD_RE = re.compile(r"^(?P<key>\w[\w-]*):\s*(?P<value>.+)$", re.MULTILINE)
+_FIELD_RE = re.compile(r"^(?P<key>\w[\w-]*):\s*(?P<value>.*)$", re.MULTILINE)
 
 # How often to re-scan the skills directory (seconds)
 SKILL_RELOAD_INTERVAL = 60.0
 
 
 def _parse_skill_meta(skill_dir: Path) -> dict[str, str] | None:
-    """Read SKILL.md frontmatter and return {name, description} or None."""
-    skill_md = skill_dir / "SKILL.md"
-    if not skill_md.exists():
+    """Read SKILL.md or skill.md frontmatter and return {name, description} or None."""
+    for name in ("SKILL.md", "skill.md"):
+        skill_md = skill_dir / name
+        if skill_md.exists():
+            break
+    else:
         return None
     try:
         text = skill_md.read_text(encoding="utf-8")
@@ -53,7 +56,17 @@ def _parse_skill_meta(skill_dir: Path) -> dict[str, str] | None:
             return None
         fields = dict(_FIELD_RE.findall(m.group("body")))
         name = fields.get("name", skill_dir.name).strip()
-        description = fields.get("description", "").strip()
+        # Handle YAML block scalar (|) and folded scalar (>) multi-line values
+        desc_raw = fields.get("description", "")
+        if desc_raw in ("|", ">"):
+            import re as re2
+            body = m.group("body")
+            # Find all indented lines after the description: | or > line
+            pattern = r"^description:\s*[|>]\s*\n((?:\s+.+\n?)+)"
+            match = re2.search(pattern, body, re2.MULTILINE)
+            if match:
+                desc_raw = match.group(1).strip()
+        description = desc_raw.strip()
         return {"name": name, "description": description}
     except OSError:
         logger.warning("Failed to read %s", skill_md)

@@ -91,6 +91,20 @@ class TestParseLine:
         assert event.is_complete is True
         assert event.error == "Something broke"
 
+    def test_result_error_during_execution(self):
+        """error_during_execution is a CLI-level error subtype — no top-level error field."""
+        line = (
+            '{"type": "result", "subtype": "error_during_execution", '
+            '"duration_ms": 0, "duration_api_ms": 0, "is_error": true, '
+            '"result": "Error: Permission denied (os error 13)", '
+            '"session_id": "abc-123"}'
+        )
+        event = parse_line(line)
+        assert event is not None
+        assert event.is_complete is True
+        assert event.error == "Error: Permission denied (os error 13)"
+        assert event.text == ""
+
     def test_result_is_error_true_promoted_to_event_error(self):
         """API-level errors come as subtype=success + is_error=true + result=<error text>.
 

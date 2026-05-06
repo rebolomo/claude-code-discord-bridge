@@ -54,6 +54,8 @@ class ClaudeDiscordBot(commands.Bot):
         intents = discord.Intents.default()
         intents.message_content = True
         intents.guilds = True
+        intents.guild_messages = True
+        intents.presences = True
 
         super().__init__(
             command_prefix="!",  # Not used, but required
@@ -76,6 +78,11 @@ class ClaudeDiscordBot(commands.Bot):
 
     async def on_ready(self) -> None:
         logger.info("Logged in as %s (ID: %s)", self.user, self.user.id if self.user else "?")
+        try:
+            await self.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name="Claude Code"))
+            logger.info("Bot presence set to online")
+        except Exception as e:
+            logger.error("Failed to set presence: %s", e)
         logger.info("Watching channel ID: %d", self.channel_id)
 
         # Re-register persistent AskViews for any questions that were pending

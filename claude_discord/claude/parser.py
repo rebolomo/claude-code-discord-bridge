@@ -206,17 +206,19 @@ def _parse_result(data: dict[str, Any], event: StreamEvent) -> None:
         event.text = result_text
 
     # Check for errors.
-    # Two error shapes from the CLI:
-    #   {"type":"result","subtype":"error","error":"..."} — explicit error subtype
-    #   {"type":"result","subtype":"success","is_error":true,"result":"API Error: ..."} — API-level
-    #     error reported as a "successful" result with is_error flag (e.g. 400 from Anthropic API)
+    # Three error shapes from the CLI:
+    #   {"type":"result","subtype":"error","error":"..."}            — explicit error subtype
+    #   {"type":"result","subtype":"error_during_execution",...}    — CLI-level error (no tools executed)
+    #   {"type":"result","subtype":"success","is_error":true,...}   — API-level error (e.g. 400 from Anthropic API)
     subtype = data.get("subtype", "")
-    if subtype == "error":
-        event.error = data.get("error", "Unknown error")
+    if subtype in ("error", "error_during_execution"):
+        # error_during_execution may not have a top-level "error" field;
+        # fall back to the result text, then the subtype itself as a last resort.
+        event.error = data.get("error") or result_text or subtype
+        if subtype == "error_during_execution" and result_text:
+            event.text = ""  # suppress result text display when showing error embed
     elif data.get("is_error") and result_text:
-        # API-level error (e.g. "API Error: 400 ...") surfaced via is_error flag.
-        # Promote it to event.error so the Discord handler shows an error embed,
-        # not a normal session-complete embed.
+        # API-level error surfaced via is_error flag.
         event.error = result_text
         event.text = ""  # suppress duplicate display via result text path
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import glob
 import os
 import re
 import shutil
@@ -380,6 +381,11 @@ class ClaudeRunner:
         if self.append_system_prompt:
             args.extend(["--append-system-prompt", self.append_system_prompt])
 
+        # Load MCP config from ~/.claude/mcp.json if it exists
+        mcp_config = Path.home() / ".claude" / "mcp.json"
+        if mcp_config.exists():
+            args.extend(["--mcp-config", str(mcp_config)])
+
         if self.image_urls:
             # Images are passed via stdin as URL content blocks in the
             # stream-json input protocol.  The --input-format flag tells the
@@ -408,6 +414,9 @@ class ClaudeRunner:
             "DISCORD_BOT_TOKEN",
             "DISCORD_TOKEN",
             "API_SECRET_KEY",
+            # nvm-managed paths must be preserved so the subprocess can resolve `claude`
+            "NVM_BIN",
+            "NVM_DIR",
         }
     )
 
@@ -427,6 +436,26 @@ class ClaudeRunner:
             env["CCDB_API_SECRET"] = self.api_secret
         if self.thread_id is not None:
             env["DISCORD_THREAD_ID"] = str(self.thread_id)
+        # Ensure nvm-managed claude is on PATH regardless of how the parent process started.
+        # Probe the standard nvm install location so this works even when the parent
+        # process was started without NVM_DIR/NVM_BIN set.
+        nvm_dir = os.environ.get("NVM_DIR", "/home/ubuntu/.nvm")
+        nvm_bin = os.environ.get("NVM_BIN")
+        if not nvm_bin:
+            # Find the newest node version under nvm's versions directory
+            versions = sorted(
+                glob.glob(os.path.join(nvm_dir, "versions", "node", "*", "bin")),
+                key=lambda p: p,
+                reverse=True,
+            )
+            if versions:
+                nvm_bin = versions[0]
+        if nvm_bin and nvm_bin not in env.get("PATH", ""):
+            env["PATH"] = f"{nvm_bin}:{env.get('PATH', '')}"
+        # Ensure ~/.local/bin (uvx location) is on PATH for MCP servers
+        local_bin = str(Path.home() / ".local" / "bin")
+        if local_bin not in env.get("PATH", ""):
+            env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
         return env
 
     async def _read_stream(self) -> AsyncGenerator[StreamEvent, None]:

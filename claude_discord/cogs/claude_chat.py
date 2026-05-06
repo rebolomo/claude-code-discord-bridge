@@ -141,6 +141,9 @@ class ClaudeChatCog(commands.Cog):
         self._settings_repo = settings_repo or getattr(bot, "settings_repo", None)
         # When True, rename the thread after creation using a claude -p title suggestion
         self._auto_rename_threads = auto_rename_threads
+        # Pending attachments store: keyed by (user_id, channel_id) -> list of ImageSource dicts
+        # Stores attachments from messages that don't @mention the bot, for follow-up @mention use
+        self._pending_attachments: dict[tuple[int, int], list[dict]] = {}
 
     @property
     def active_session_count(self) -> int:
@@ -190,7 +193,11 @@ class ClaudeChatCog(commands.Cog):
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         """Handle incoming messages."""
-        # Ignore bot messages (but allow webhook messages for testing)
+        # Ignore messages from this bot itself (posted via REST API for dashboard/status)
+        if self.bot.user and message.author.id == self.bot.user.id:
+            return
+
+        # Ignore messages from other bots unless they are webhook messages (external triggers)
         if message.author.bot and not message.webhook_id:
             return
 
@@ -212,6 +219,9 @@ class ClaudeChatCog(commands.Cog):
                 (message.channel.id in self._mention_only_channel_ids or self._require_mention)
                 and self.bot.user not in message.mentions
             ):
+                # Store attachments for potential follow-up @mention
+                if message.attachments:
+                    await self._store_pending_attachments(message)
                 return
             await self._handle_new_conversation(message)
             return
@@ -221,7 +231,93 @@ class ClaudeChatCog(commands.Cog):
             isinstance(message.channel, discord.Thread)
             and message.channel.parent_id in self._channel_ids
         ):
+            # If user @mention'd the bot but provided no attachments, check for pending ones
+            if self.bot.user in message.mentions and not message.attachments:
+                await self._check_and_use_pending_attachments(message)
             await self._handle_thread_reply(message)
+
+    async def _store_pending_attachments(self, message: discord.Message) -> None:
+        """Store attachments from a message for potential follow-up @mention use.
+
+        When a user uploads images without @mentioning the bot, we store them
+        keyed by (user_id, channel_id) so a follow-up @mention can use them.
+        """
+        if not message.attachments:
+            return
+
+        from .prompt_builder import download_discord_attachment
+
+        image_sources: list[dict] = []
+        for attachment in message.attachments[:4]:  # Max 4 images
+            content_type = attachment.content_type or ""
+            if content_type.startswith("image/") or (
+                not content_type
+                and any(attachment.filename.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"))
+            ):
+                img_source = await download_discord_attachment(attachment)
+                if img_source:
+                    image_sources.append(img_source)
+
+        if image_sources:
+            key = (message.author.id, message.channel.id)
+            self._pending_attachments[key] = image_sources
+            logger.debug(
+                "Stored %d pending attachments for user %d in channel %d",
+                len(image_sources),
+                message.author.id,
+                message.channel.id,
+            )
+
+    async def _check_and_use_pending_attachments(self, message: discord.Message) -> None:
+        """Check for pending attachments when user @mention'd without attachments.
+
+        Looks up recent messages with image attachments in the same thread
+        and stores them as pending so _build_prompt_and_images can use them.
+        """
+        if not isinstance(message.channel, discord.Thread):
+            return
+
+        # Check if we already have pending attachments for this user+thread
+        key = (message.author.id, message.channel.id)
+        if key in self._pending_attachments:
+            return  # Already have pending attachments
+
+        # Look for recent messages with attachments in this thread
+        from .prompt_builder import download_discord_attachment
+
+        try:
+            # Get last 5 messages in the thread (excluding this one)
+            history = [msg async for msg in message.channel.history(limit=6, before=message)]
+        except Exception:
+            logger.debug("Failed to fetch thread history for pending attachments")
+            return
+
+        for msg in history:
+            if not msg.attachments:
+                continue
+            if msg.author.id != message.author.id:
+                continue  # Only use same user's attachments
+
+            image_sources: list[dict] = []
+            for attachment in msg.attachments[:4]:
+                content_type = attachment.content_type or ""
+                if content_type.startswith("image/") or (
+                    not content_type
+                    and any(attachment.filename.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"))
+                ):
+                    img_source = await download_discord_attachment(attachment)
+                    if img_source:
+                        image_sources.append(img_source)
+
+            if image_sources:
+                self._pending_attachments[key] = image_sources
+                logger.debug(
+                    "Found %d pending attachments from message %d for user %d",
+                    len(image_sources),
+                    msg.id,
+                    message.author.id,
+                )
+                break  # Only use the most recent one
 
     @app_commands.command(name="help", description="Show available commands and how to use the bot")
     async def help_command(self, interaction: discord.Interaction) -> None:
@@ -723,9 +819,29 @@ class ClaudeChatCog(commands.Cog):
             chat_only=chat_only,
         )
 
-    async def _build_prompt_and_images(self, message: discord.Message) -> tuple[str, list[str]]:
-        """Delegate to the standalone prompt_builder module."""
-        return await build_prompt_and_images(message)
+    async def _build_prompt_and_images(
+        self, message: discord.Message
+    ) -> tuple[str, list[dict[str, str]]]:
+        """Build prompt and collect image sources from the message.
+
+        If the message has no attachments but the user has pending attachments
+        stored (from a previous message), those will be included.
+        """
+        prompt, image_sources = await build_prompt_and_images(message)
+
+        # If current message has no images, check for pending attachments
+        if not image_sources:
+            key = (message.author.id, message.channel.id)
+            if key in self._pending_attachments:
+                image_sources = self._pending_attachments.pop(key)
+                logger.debug(
+                    "Using %d pending attachments for user %d in channel %d",
+                    len(image_sources),
+                    message.author.id,
+                    message.channel.id,
+                )
+
+        return prompt, image_sources
 
     async def _run_claude(
         self,
@@ -733,7 +849,7 @@ class ClaudeChatCog(commands.Cog):
         thread: discord.Thread | discord.TextChannel,
         prompt: str,
         session_id: str | None,
-        image_urls: list[str] | None = None,
+        image_urls: list[dict[str, str]] | None = None,
         fork: bool = False,
         working_dir_override: str | None = None,
         chat_only: bool = False,
